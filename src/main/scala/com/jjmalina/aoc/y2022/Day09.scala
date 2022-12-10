@@ -5,7 +5,6 @@ import cats.effect._
 import cats.syntax.all._
 import fs2._
 import com.jjmalina.aoc.AOCApp
-import cats.syntax.apply
 
 object Day09 extends AOCApp(2022, 9) {
   enum Direction {
@@ -44,15 +43,37 @@ object Day09 extends AOCApp(2022, 9) {
     ).union(diagonals(tail).toSet).contains(head)
   }
 
-  def nextTailPosition(nextHead: Position, tail: Position, move: Move): Position =
+  def nextTailPosition(nextHead: Position, tail: Position): Position =
     if (isTailAdjacent(nextHead, tail)) {
       tail
     } else {
-      move.direction match
-        case Direction.Left => Position(nextHead.x + 1, nextHead.y)
-        case Direction.Right => Position(nextHead.x - 1, nextHead.y)
-        case Direction.Up => Position(nextHead.x, nextHead.y - 1)
-        case Direction.Down => Position(nextHead.x, nextHead.y + 1)
+      /*
+      how do we make this work without the move???
+        nextHead.x < tail.x -> left
+        nextHead.x > tail.x -> right
+        nextHead.y > tail.y -> up
+        nextHead.y < tail.y -> down
+
+        if math.abs(nextHead.x - tail.x) >
+      */
+      if (math.abs(nextHead.x - tail.x) > math.abs(nextHead.y - tail.y)) {
+        if (nextHead.x < tail.x) {
+          Position(nextHead.x + 1, nextHead.y)
+        } else {
+          Position(nextHead.x - 1, nextHead.y)
+        }
+      } else {
+        if (nextHead.y > tail.y) {
+          Position(nextHead.x, nextHead.y - 1)
+        } else {
+          Position(nextHead.x, nextHead.y + 1)
+        }
+      }
+      // move.direction match
+      //   case Direction.Left => Position(nextHead.x + 1, nextHead.y)
+      //   case Direction.Right => Position(nextHead.x - 1, nextHead.y)
+      //   case Direction.Up => Position(nextHead.x, nextHead.y - 1)
+      //   case Direction.Down => Position(nextHead.x, nextHead.y + 1)
     }
 
   def diagonals(position: Position): List[Position] =
@@ -69,7 +90,7 @@ object Day09 extends AOCApp(2022, 9) {
     else {
       if (currentTail.x == nextTail.x) {
         (for {
-          y <- (currentTail.y to nextTail.y by (if (currentTail.x > nextTail.x) -1 else 1))
+          y <- (currentTail.y to nextTail.y by (if (currentTail.y > nextTail.y) -1 else 1))
         } yield Position(nextTail.x, y)).toList
       } else if (currentTail.y == nextTail.y) {
         (for {
@@ -78,7 +99,6 @@ object Day09 extends AOCApp(2022, 9) {
       } else {
         // we have to take a diagonal
         // take the one which has the closest x and y
-        // TODO this may not work on all quadrants of the grid?
         val diag = diagonals(currentTail)
           .minBy(p => math.abs(nextTail.x - p.x) + math.abs(nextTail.y - p.y))
         List(diag).appendedAll(tailPath(diag, nextTail))
@@ -87,12 +107,42 @@ object Day09 extends AOCApp(2022, 9) {
 
   def applyMove(s: State, move: Move): State = {
     val nextHeadPos = nextHeadPosition(s.headPosition, move)
-    val nextTailPos = nextTailPosition(nextHeadPos, s.tailPosition, move)
+    val nextTailPos = nextTailPosition(nextHeadPos, s.tailPosition)
+    val tp = tailPath(s.tailPosition, nextTailPos)
+    // println("+++")
+    // println(("head", s.headPosition))
+    // println(("tail", s.tailPosition))
+    // println(("move", move))
+    // println(("next head", nextHeadPos))
+    // println(("next tail", nextTailPos))
+    // println(("tail path", tp))
+    // println("+++\n")
     State(
       nextHeadPos,
       nextTailPos,
       s.previousTailPositions.appendedAll(tailPath(s.tailPosition, nextTailPos))
     )
+  }
+
+  case class TailState(position: Position, previousPositions: List[Position])
+
+  case class MultiTailState(
+    headPosition: Position,
+    tailPositionsAndPaths: List[TailState]
+  )
+
+  def initialMultiTailStates: MultiTailState =
+    MultiTailState(Position(0,0), List.fill(9)(TailState(Position(0,0), List())))
+
+  def applyMultiTailMove(s: MultiTailState, move: Move): MultiTailState = {
+    val nextHeadPos = nextHeadPosition(s.headPosition, move)
+    val (ns, newTailStates) = s.tailPositionsAndPaths.foldLeft((nextHeadPos, List.empty[TailState]))((acc, ts) => {
+      val (nextHead, tailStates) = acc
+      val nextTailPos = nextTailPosition(nextHead, ts.position)
+      val newPrevPositions = ts.previousPositions.appendedAll(tailPath(ts.position, nextTailPos))
+      (nextTailPos, tailStates.appendedAll(List(TailState(nextTailPos, newPrevPositions))))
+    })
+    MultiTailState(nextHeadPos, newTailStates)
   }
 
   def parseMove(line: String): Move = {
@@ -105,7 +155,7 @@ object Day09 extends AOCApp(2022, 9) {
     }
   }
 
-  def solve(input: Stream[IO, String]): IO[String] = {
+  override def part1(input: Stream[IO, String]): IO[String] =
     input
       .through(text.lines)
       .filter(_ != "")
@@ -117,13 +167,18 @@ object Day09 extends AOCApp(2022, 9) {
         println((s.headPosition, s.tailPosition))
         s.previousTailPositions.toSet.size.toString
       }).getOrElse("Failed"))
-  }
-
-  override def part1(input: Stream[IO, String]): IO[String] =
-    solve(input)
 
   override def part2(input: Stream[IO, String]): IO[String] =
-   solve(input)
+   input
+      .through(text.lines)
+      .filter(_ != "")
+      .map(parseMove)
+      .fold(initialMultiTailStates)(applyMultiTailMove)
+      .compile
+      .toList
+      .map(_.headOption.map(s => {
+        s.tailPositionsAndPaths.reverse.head.previousPositions.toSet.size.toString
+      }).getOrElse("Failed"))
 
   def renderPositions(positions: Set[Position], height: Int, width: Int): String = {
     (0 to height)
@@ -151,8 +206,32 @@ object Day09 extends AOCApp(2022, 9) {
     )
     // tail visited 13 positions at least once
     val endState = lines.map(parseMove).foldLeft(initialStates)(applyMove)
-    println(endState.previousTailPositions)
-    println(endState.previousTailPositions.toSet)
+    println(endState.previousTailPositions.toSet.size)
     println(renderPositions(endState.previousTailPositions.toSet, 4, 5))
+
+    val lines2 = List(
+      "R 5",
+      "U 8",
+      "L 8",
+      "D 3",
+      "R 17",
+      "D 10",
+      "L 25",
+      "U 20",
+    )
+    val endState2 = lines2.map(parseMove).foldLeft(initialMultiTailStates)(applyMultiTailMove)
+    println(endState2.tailPositionsAndPaths.reverse.head.previousPositions.toSet.size)
+    // tail 9 visits 36 positions
+  }
+
+  import scala.io.Source
+
+  def runOnInput: Unit = {
+    val data = Source.fromFile("notes/day9/input.txt").getLines.toList
+    val endState = data.map(parseMove).foldLeft(initialStates)(applyMove)
+    println(endState.previousTailPositions.toSet.size)
+
+    val endState2 = data.map(parseMove).foldLeft(initialMultiTailStates)(applyMultiTailMove)
+    println(endState2.tailPositionsAndPaths.reverse.head.previousPositions.toSet.size)
   }
 }
